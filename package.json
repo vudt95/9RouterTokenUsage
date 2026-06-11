@@ -1,0 +1,114 @@
+{
+  "name": "9router-token-usage",
+  "displayName": "9Router Token Usage",
+  "description": "Theo dõi usage của các provider 9Router ngay trên status bar VSCode.",
+  "version": "0.0.1",
+  "publisher": "dtvu95",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "keywords": [
+    "token",
+    "usage",
+    "api",
+    "quota",
+    "status bar",
+    "monitor"
+  ],
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vudt95/9RouterTokenUsage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vudt95/9RouterTokenUsage/issues"
+  },
+  "homepage": "https://github.com/vudt95/9RouterTokenUsage#readme",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiTokenUsage.refresh",
+        "title": "AI Token Usage: Làm mới"
+      },
+      {
+        "command": "aiTokenUsage.setApiKey",
+        "title": "AI Token Usage: Thiết lập API Key"
+      },
+      {
+        "command": "aiTokenUsage.showDetails",
+        "title": "AI Token Usage: Xem chi tiết"
+      }
+    ],
+    "configuration": {
+      "title": "AI Token Usage",
+      "properties": {
+        "aiTokenUsage.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:20128",
+          "markdownDescription": "Base URL của API. Ví dụ: `http://localhost:20128/`."
+        },
+        "aiTokenUsage.providersPath": {
+          "type": "string",
+          "default": "/api/providers?page=1&pageSize=20&accountStatus=all&sort=priority&isActive=true",
+          "markdownDescription": "Đường dẫn endpoint lấy danh sách providers. Response cần có `connections`."
+        },
+        "aiTokenUsage.usagePathTemplate": {
+          "type": "string",
+          "default": "/api/usage/{id}",
+          "markdownDescription": "Template endpoint lấy usage theo provider id. `{id}` sẽ được thay bằng id của từng provider."
+        },
+        "aiTokenUsage.statusBarQuota": {
+          "type": "string",
+          "default": "session",
+          "enum": ["session", "weekly"],
+          "description": "Quota dùng để hiển thị ở status bar cho provider có priority=1."
+        },
+        "aiTokenUsage.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "description": "Khoảng thời gian (giây) tự động làm mới thông tin usage."
+        },
+        "aiTokenUsage.apiKeyHeader": {
+          "type": "string",
+          "default": "x-api-key",
+          "markdownDescription": "Deprecated. Extension hiện gửi đồng thời `x-api-key` và `Authorization: Bearer <key>` theo API 9Router."
+        },
+        "aiTokenUsage.apiKeyPrefix": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Deprecated. Giữ lại để không phá settings cũ."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tsc": "tsc -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4"
+  }
+}
