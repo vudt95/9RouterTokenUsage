@@ -2,8 +2,8 @@
   "name": "9router-token-usage",
   "displayName": "9Router Token Usage",
   "description": "Theo dõi usage của các provider 9Router ngay trên status bar VSCode.",
-  "version": "0.0.1",
-  "publisher": "dtvu95",
+  "version": "0.0.2",
+  "publisher": "9router-token-usage",
   "license": "MIT",
   "icon": "media/icon.png",
   "keywords": [

@@ -63,6 +63,7 @@ let statusBarItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastDashboard: DashboardData | undefined;
 let lastError: string | undefined;
+let detailsPanel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(
@@ -438,8 +439,9 @@ function renderStatusBar(missingKey = false): void {
 
   const quotaLabel = quota
     ? formatQuotaForStatus(quotaName ?? cfg.statusBarQuota, quota)
-    : 'không có usage';
-  statusBarItem.text = `${icon} priority=1 ${quotaLabel}`;
+    : 'N/A';
+  const provName = truncateName(displayName(primary.connection), 12);
+  statusBarItem.text = `${icon} ${provName} · ${quotaLabel}`;
   statusBarItem.backgroundColor = bg;
   statusBarItem.tooltip = createDashboardTooltip(lastDashboard);
 }
@@ -449,61 +451,97 @@ function createDashboardTooltip(data: DashboardData): vscode.MarkdownString {
   md.isTrusted = true;
   md.supportHtml = true;
 
-  md.appendMarkdown('**9Router Token Usage**\n\n');
+  // Header
+  md.appendMarkdown('### $(graph) 9Router Token Usage\n\n');
   md.appendMarkdown(
-    `Cập nhật: \`${formatDate(data.fetchedAt.toISOString())}\`\n\n`
-  );
-  md.appendMarkdown(
-    'Status bar đang hiển thị provider có `priority=1`. Bấm để xem popup đầy đủ.\n\n'
+    `$(clock) Cập nhật: \`${formatDate(data.fetchedAt.toISOString())}\`\n\n`
   );
   if (lastError) {
-    md.appendMarkdown(`> Lần làm mới gần nhất lỗi: ${lastError}\n\n`);
+    md.appendMarkdown(`> $(warning) Lỗi lần làm mới gần nhất: ${lastError}\n\n`);
   }
+  md.appendMarkdown('---\n\n');
 
-  for (const item of data.items) {
+  for (let i = 0; i < data.items.length; i++) {
+    const item = data.items[i];
     const { connection, usage } = item;
-    const primaryMark = connection.priority === 1 ? '⭐ ' : '';
-    md.appendMarkdown(
-      `### ${primaryMark}priority=${connection.priority} — \`${displayName(
-        connection
-      )}\`\n\n`
-    );
-    md.appendMarkdown(
-      `- Provider: \`${connection.provider}\`${
-        connection.authType ? ` · Auth: \`${connection.authType}\`` : ''
-      }\n`
-    );
-    md.appendMarkdown(
-      `- Active: \`${connection.isActive}\`${
-        connection.testStatus ? ` · Test: \`${connection.testStatus}\`` : ''
-      }\n`
-    );
-    if (usage?.plan || connectionPlan(connection)) {
-      md.appendMarkdown(
-        `- Plan: \`${usage?.plan ?? connectionPlan(connection)}\`\n`
-      );
+    const isPrimary = connection.priority === 1;
+    const nameLabel = displayName(connection);
+
+    // Provider header with priority badge
+    if (isPrimary) {
+      md.appendMarkdown(`### ⭐ ${nameLabel}\n\n`);
+    } else {
+      md.appendMarkdown(`### $(account) ${nameLabel}\n\n`);
     }
+
+    // Status badges row
+    const plan = usage?.plan ?? connectionPlan(connection);
+    const badges: string[] = [];
+    badges.push(`\`#${connection.priority}\``);
+    badges.push(`\`${connection.provider}\``);
+    if (connection.authType) {
+      badges.push(`\`${connection.authType}\``);
+    }
+    if (plan) {
+      badges.push(`\`${plan}\``);
+    }
+    // Active/test status
+    if (connection.isActive && connection.testStatus === 'active') {
+      badges.push('`✓ active`');
+    } else if (connection.isActive) {
+      badges.push(`\`active\``);
+    } else {
+      badges.push('`✗ inactive`');
+    }
+    md.appendMarkdown(badges.join(' · ') + '\n\n');
+
+    // Error or no data
     if (item.error) {
-      md.appendMarkdown(`- Usage error: \`${item.error}\`\n\n`);
+      md.appendMarkdown(`$(error) Lỗi: \`${item.error}\`\n\n`);
+      if (i < data.items.length - 1) {
+        md.appendMarkdown('---\n\n');
+      }
       continue;
     }
     if (!usage) {
-      md.appendMarkdown('- Chưa có dữ liệu usage.\n\n');
+      md.appendMarkdown('$(info) Chưa có dữ liệu usage.\n\n');
+      if (i < data.items.length - 1) {
+        md.appendMarkdown('---\n\n');
+      }
       continue;
     }
 
-    md.appendMarkdown(
-      `- Limit reached: \`${usage.limitReached}\` · Review limit: \`${usage.reviewLimitReached}\`\n`
-    );
+    // Limit warnings
+    if (usage.limitReached) {
+      md.appendMarkdown('$(error) **Đã hết limit!**\n\n');
+    }
+    if (usage.reviewLimitReached) {
+      md.appendMarkdown('$(warning) **Đã hết review limit!**\n\n');
+    }
+
+    // Quotas
     appendQuotaMarkdown(md, usage);
+
+    // Timestamps
+    const timestamps: string[] = [];
     if (connection.lastUsedAt) {
-      md.appendMarkdown(`- Last used: \`${formatDate(connection.lastUsedAt)}\`\n`);
+      timestamps.push(`$(history) Dùng lần cuối: \`${formatDate(connection.lastUsedAt)}\``);
     }
     if (connection.expiresAt) {
-      md.appendMarkdown(`- Expires: \`${formatDate(connection.expiresAt)}\`\n`);
+      timestamps.push(`$(calendar) Hết hạn: \`${formatDate(connection.expiresAt)}\``);
     }
-    md.appendMarkdown('\n');
+    if (timestamps.length > 0) {
+      md.appendMarkdown(timestamps.join(' &nbsp;│&nbsp; ') + '\n\n');
+    }
+
+    // Separator between providers
+    if (i < data.items.length - 1) {
+      md.appendMarkdown('---\n\n');
+    }
   }
+
+  // Footer
+  md.appendMarkdown('\n\n$(info) Bấm để xem chi tiết đầy đủ.\n');
 
   return md;
 }
@@ -511,16 +549,21 @@ function createDashboardTooltip(data: DashboardData): vscode.MarkdownString {
 function appendQuotaMarkdown(md: vscode.MarkdownString, usage: UsageData): void {
   for (const [name, quota] of Object.entries(usage.quotas)) {
     const usedPct = getUsedPercent(quota);
+    const quotaIcon = name === 'session' ? '$(pulse)' : '$(calendar)';
+
+    // Quota header with name and percentage
     md.appendMarkdown(
-      `- ${quotaTitle(name)}: \`${formatQuotaDetail(quota)}\` (${usedPct.toFixed(
-        1
-      )}% đã dùng)\n`
+      `${quotaIcon} **${quotaTitle(name)}** — \`${quota.used}\`/\`${quota.total}\` đã dùng (\`${usedPct.toFixed(1)}%\`)\n\n`
     );
+
+    // Progress bar
     if (!quota.unlimited && quota.total > 0) {
-      md.appendMarkdown(`  ${renderBar(usedPct)}\n`);
+      md.appendMarkdown(`${renderBar(usedPct)}\n\n`);
     }
+
+    // Reset time
     if (quota.resetAt) {
-      md.appendMarkdown(`  Reset: \`${formatDate(quota.resetAt)}\`\n`);
+      md.appendMarkdown(`$(sync) Reset: \`${formatDate(quota.resetAt)}\`\n\n`);
     }
   }
 }
@@ -560,78 +603,368 @@ async function showDetails(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
-  const pick = await vscode.window.showInformationMessage(
-    '9Router Token Usage',
-    { modal: true, detail: createDashboardDetails(lastDashboard) },
-    'Làm mới',
-    'Đổi API key'
-  );
-  if (pick === 'Làm mới') {
-    await refresh(context);
-  } else if (pick === 'Đổi API key') {
-    await setApiKey(context);
+  if (detailsPanel) {
+    detailsPanel.webview.html = getWebviewContent(lastDashboard);
+    detailsPanel.reveal(vscode.ViewColumn.One);
+    return;
   }
+
+  detailsPanel = vscode.window.createWebviewPanel(
+    'aiTokenUsage.dashboard',
+    '9Router Token Usage',
+    vscode.ViewColumn.One,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+  detailsPanel.webview.html = getWebviewContent(lastDashboard);
+
+  detailsPanel.webview.onDidReceiveMessage(
+    async (msg: { command: string }) => {
+      if (msg.command === 'refresh') {
+        await refresh(context);
+        if (lastDashboard && detailsPanel) {
+          detailsPanel.webview.html = getWebviewContent(lastDashboard);
+        }
+      } else if (msg.command === 'changeApiKey') {
+        await setApiKey(context);
+      }
+    },
+    undefined,
+    context.subscriptions
+  );
+
+  detailsPanel.onDidDispose(
+    () => {
+      detailsPanel = undefined;
+    },
+    undefined,
+    context.subscriptions
+  );
 }
 
-function createDashboardDetails(data: DashboardData): string {
-  const lines: string[] = [
-    `Cập nhật: ${formatDate(data.fetchedAt.toISOString())}`,
-    'Status bar đang hiển thị provider có priority=1.',
-    ''
-  ];
+function escHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-  if (lastError) {
-    lines.push(`Lỗi lần làm mới gần nhất: ${lastError}`, '');
-  }
+function getWebviewContent(data: DashboardData): string {
+  let cardsHtml = '';
 
   for (const item of data.items) {
     const { connection, usage } = item;
-    lines.push(
-      `[priority=${connection.priority}] ${displayName(connection)}`,
-      `ID: ${connection.id}`,
-      `Provider: ${connection.provider}${
-        connection.authType ? ` | Auth: ${connection.authType}` : ''
-      }`,
-      `Active: ${connection.isActive}${
-        connection.testStatus ? ` | Test: ${connection.testStatus}` : ''
-      }`
-    );
+    const isPrimary = connection.priority === 1;
+    const nameLabel = escHtml(displayName(connection));
+    const plan = usage?.plan ?? connectionPlan(connection);
 
-    if (usage?.plan || connectionPlan(connection)) {
-      lines.push(`Plan: ${usage?.plan ?? connectionPlan(connection)}`);
+    // Badges
+    let badgesHtml = `<span class="badge priority">#${connection.priority}</span>`;
+    badgesHtml += `<span class="badge">${escHtml(connection.provider)}</span>`;
+    if (connection.authType) {
+      badgesHtml += `<span class="badge">${escHtml(connection.authType)}</span>`;
     }
-    if (connection.lastUsedAt) {
-      lines.push(`Last used: ${formatDate(connection.lastUsedAt)}`);
+    if (plan) {
+      badgesHtml += `<span class="badge plan">${escHtml(plan)}</span>`;
     }
-    if (connection.lastRefreshAt) {
-      lines.push(`Last refresh: ${formatDate(connection.lastRefreshAt)}`);
-    }
-    if (connection.expiresAt) {
-      lines.push(`Expires: ${formatDate(connection.expiresAt)}`);
+    if (connection.isActive && connection.testStatus === 'active') {
+      badgesHtml += '<span class="badge active">✓ Active</span>';
+    } else if (connection.isActive) {
+      badgesHtml += '<span class="badge active">Active</span>';
+    } else {
+      badgesHtml += '<span class="badge inactive">✗ Inactive</span>';
     }
 
+    // Quotas
+    let quotasHtml = '';
     if (item.error) {
-      lines.push(`Usage error: ${item.error}`, '');
-      continue;
-    }
-    if (!usage) {
-      lines.push('Usage: chưa có dữ liệu', '');
-      continue;
-    }
+      quotasHtml = `<div class="error-msg">⚠ ${escHtml(item.error)}</div>`;
+    } else if (!usage) {
+      quotasHtml = '<div class="no-data">Chưa có dữ liệu usage</div>';
+    } else {
+      // Limit warnings
+      if (usage.limitReached) {
+        quotasHtml += '<div class="limit-alert limit">🔴 ĐÃ HẾT LIMIT!</div>';
+      }
+      if (usage.reviewLimitReached) {
+        quotasHtml += '<div class="limit-alert review">🟡 Đã hết review limit</div>';
+      }
 
-    lines.push(
-      `Limit reached: ${usage.limitReached} | Review limit: ${usage.reviewLimitReached}`
-    );
-    for (const [name, quota] of Object.entries(usage.quotas)) {
-      lines.push(`${quotaTitle(name)}: ${formatQuotaDetail(quota)}`);
-      if (quota.resetAt) {
-        lines.push(`  Reset: ${formatDate(quota.resetAt)}`);
+      for (const [name, quota] of Object.entries(usage.quotas)) {
+        const usedPct = getUsedPercent(quota);
+        let barColor = 'var(--green)';
+        if (usedPct >= 95) { barColor = 'var(--red)'; }
+        else if (usedPct >= 85) { barColor = 'var(--yellow)'; }
+
+        const resetHtml = quota.resetAt
+          ? `<div class="reset-time">🔄 Reset: ${escHtml(formatDate(quota.resetAt))}</div>`
+          : '';
+
+        quotasHtml += `
+          <div class="quota-block">
+            <div class="quota-header">
+              <span class="quota-name">${quotaTitle(name)}</span>
+              <span class="quota-nums">${quota.used} / ${quota.total}</span>
+              <span class="quota-pct">${usedPct.toFixed(1)}%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" style="width:${usedPct}%;background:${barColor}"></div>
+            </div>
+            ${resetHtml}
+          </div>`;
       }
     }
-    lines.push('');
+
+    // Timestamps
+    let tsHtml = '';
+    const tsItems: string[] = [];
+    if (connection.lastUsedAt) {
+      tsItems.push(`<span>🕐 Dùng lần cuối: <strong>${escHtml(formatDate(connection.lastUsedAt))}</strong></span>`);
+    }
+    if (connection.lastRefreshAt) {
+      tsItems.push(`<span>🔄 Refresh: <strong>${escHtml(formatDate(connection.lastRefreshAt))}</strong></span>`);
+    }
+    if (connection.expiresAt) {
+      tsItems.push(`<span>📅 Hết hạn: <strong>${escHtml(formatDate(connection.expiresAt))}</strong></span>`);
+    }
+    if (tsItems.length > 0) {
+      tsHtml = `<div class="timestamps">${tsItems.join('<span class="ts-sep">│</span>')}</div>`;
+    }
+
+    cardsHtml += `
+      <div class="card${isPrimary ? ' primary' : ''}">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="star">${isPrimary ? '⭐' : '👤'}</span>
+            <span class="name">${nameLabel}</span>
+          </div>
+          <div class="badges">${badgesHtml}</div>
+        </div>
+        <div class="card-body">
+          ${quotasHtml}
+        </div>
+        ${tsHtml}
+      </div>`;
   }
 
-  return lines.join('\n');
+  return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root {
+    --bg: #0d1117;
+    --card-bg: #161b22;
+    --card-border: #30363d;
+    --card-primary-border: #1f6feb;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --track: #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 20px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .header-left h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header-left h1 .logo { font-size: 22px; }
+  .header-left .updated {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .header-actions { display: flex; gap: 8px; }
+  .btn {
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .btn:hover {
+    background: #30363d;
+    border-color: #8b949e;
+  }
+  .btn-primary {
+    background: #238636;
+    border-color: #2ea043;
+  }
+  .btn-primary:hover {
+    background: #2ea043;
+    border-color: #3fb950;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+    transition: border-color 0.15s ease;
+  }
+  .card:hover { border-color: #484f58; }
+  .card.primary { border-color: var(--card-primary-border); }
+  .card.primary:hover { border-color: var(--blue); }
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .card-title .star { font-size: 16px; }
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: #21262d;
+    color: var(--text-muted);
+    border: 1px solid var(--card-border);
+  }
+  .badge.priority { color: var(--blue); border-color: #1f4470; background: #0d1f3c; }
+  .badge.plan { color: #d2a8ff; border-color: #3d2960; background: #1c1236; }
+  .badge.active { color: var(--green); border-color: #1b4721; background: #0d2818; }
+  .badge.inactive { color: var(--red); border-color: #5a1e1e; background: #2d1111; }
+  .card-body { display: flex; flex-direction: column; gap: 12px; }
+  .quota-block { padding: 0; }
+  .quota-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .quota-name {
+    font-weight: 600;
+    font-size: 13px;
+    min-width: 64px;
+  }
+  .quota-nums {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .quota-pct {
+    margin-left: auto;
+    font-weight: 600;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    background: var(--track);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.4s ease;
+  }
+  .reset-time {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  .timestamps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--card-border);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .timestamps strong { color: var(--text); font-weight: 500; }
+  .ts-sep { color: #30363d; margin: 0 6px; }
+  .error-msg {
+    color: var(--red);
+    padding: 8px 12px;
+    background: #2d1111;
+    border: 1px solid #5a1e1e;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .no-data {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+  .limit-alert {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .limit-alert.limit {
+    background: #2d1111;
+    border: 1px solid #5a1e1e;
+    color: var(--red);
+  }
+  .limit-alert.review {
+    background: #2d2200;
+    border: 1px solid #5a4400;
+    color: var(--yellow);
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <h1><span class="logo">📊</span> 9Router Token Usage</h1>
+      <div class="updated">Cập nhật: ${escHtml(formatDate(data.fetchedAt.toISOString()))}</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-primary" onclick="vscode.postMessage({command:'refresh'})">⟳ Làm mới</button>
+      <button class="btn" onclick="vscode.postMessage({command:'changeApiKey'})">🔑 Đổi API Key</button>
+    </div>
+  </div>
+  ${cardsHtml}
+  <script>const vscode = acquireVsCodeApi();</script>
+</body>
+</html>`;
 }
 
 function chooseQuotaName(
@@ -690,15 +1023,6 @@ function formatQuotaForStatus(name: string, quota: QuotaData): string {
   )}`;
 }
 
-function formatQuotaDetail(quota: QuotaData): string {
-  if (quota.unlimited) {
-    return `${quota.used.toLocaleString()} đã dùng / không giới hạn`;
-  }
-  return `${quota.used.toLocaleString()}/${quota.total.toLocaleString()} đã dùng, còn ${quota.remaining.toLocaleString()} (${getRemainingPercent(
-    quota
-  ).toFixed(1)}%)`;
-}
-
 function getUsedPercent(quota: QuotaData): number {
   if (quota.unlimited || quota.total <= 0) {
     return 0;
@@ -716,7 +1040,7 @@ function getRemainingPercent(quota: QuotaData): number {
   return Math.min(100, Math.max(0, (quota.remaining / quota.total) * 100));
 }
 
-function renderBar(pct: number, width = 28): string {
+function renderBar(pct: number, width = 40): string {
   const clamped = Math.min(100, Math.max(0, pct));
   const filled = Math.round((clamped / 100) * width);
   const empty = width - filled;
@@ -738,6 +1062,18 @@ function renderBar(pct: number, width = 28): string {
       ? `<span style="background-color:#3a3f47;">${unit.repeat(empty)}</span>`
       : '';
   return filledBar + emptyBar;
+}
+
+function truncateName(name: string, maxLen: number): string {
+  if (name.length <= maxLen) {
+    return name;
+  }
+  // For emails, truncate before @
+  const atIdx = name.indexOf('@');
+  if (atIdx > 0 && atIdx <= maxLen - 1) {
+    return name.slice(0, maxLen - 1) + '…';
+  }
+  return name.slice(0, maxLen - 1) + '…';
 }
 
 function formatCompact(n: number): string {
